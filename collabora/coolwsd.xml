@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Collabora Online (COOLWSD) Configuration
+  Enhanced for WOPI co-editing with LTPA authentication
+  
+  This configuration enables:
+  - WOPI storage for document access
+  - Co-editing with multiple users
+  - LTPA token passthrough
+  - Proper host whitelisting
+-->
+<config>
+    <!-- Network settings -->
+    <net desc="Network settings">
+        <!-- SSL/TLS disabled - handled by nginx reverse proxy -->
+        <proto type="string" default="all" desc="Protocol to use">all</proto>
+        <listen type="string" default="any" desc="Listen address">any</listen>
+        <service_root type="path" default="" desc="Service root"/>
+    </net>
+
+    <!-- SSL Configuration - disabled, SSL termination at nginx -->
+    <ssl desc="SSL settings">
+        <enable type="bool" default="false">false</enable>
+        <termination type="bool" default="true">true</termination>
+    </ssl>
+
+    <!-- Security settings -->
+    <security desc="Security settings">
+        <seccomp type="bool" default="true">true</seccomp>
+        <capabilities type="bool" default="true">true</capabilities>
+        <jwt_expiry_secs type="uint" default="1800">1800</jwt_expiry_secs>
+        <enable_macros_execution type="bool" default="false">false</enable_macros_execution>
+        <macro_security_level type="uint" default="1">1</macro_security_level>
+    </security>
+
+    <!-- WOPI Storage Configuration - Critical for co-editing -->
+    <storage desc="Backend storage">
+        <filesystem allow="false"/>
+        
+        <!-- WOPI Storage enabled for document access -->
+        <wopi desc="WOPI storage settings" allow="true">
+            <!-- Host whitelist - add your WOPI server hosts -->
+            <host desc="Primary WOPI host" allow="true">wopi-server</host>
+            <host desc="Localhost" allow="true">localhost</host>
+            <host desc="Docker internal" allow="true">host.docker.internal</host>
+            
+            <!-- Allow any host pattern matching your domain -->
+            <host desc="Domain pattern" allow="true">.*</host>
+            
+            <!-- Maximum file size for WOPI operations (100MB) -->
+            <max_file_size desc="Maximum file size in bytes" type="uint">104857600</max_file_size>
+            
+            <!-- Reuse cookies for LTPA SSO -->
+            <reuse_cookies type="bool" default="true">true</reuse_cookies>
+            
+            <!-- Alias groups for co-editing (users editing same file) -->
+            <alias_groups desc="Alias groups for WOPI hosts" mode="groups"/>
+        </wopi>
+        
+        <!-- WebDAV disabled -->
+        <webdav desc="WebDAV storage" allow="false"/>
+    </storage>
+
+    <!-- Server settings -->
+    <server_name desc="Server name for identification" type="string" default="">Collabora Online</server_name>
+    
+    <!-- Admin console (optional) -->
+    <admin_console desc="Admin console settings">
+        <enable type="bool" default="true">true</enable>
+        <enable_pam type="bool" default="false">false</enable_pam>
+        <username type="string" default="admin">admin</username>
+        <password type="string" default="">admin123</password>
+    </admin_console>
+
+    <!-- Logging -->
+    <logging>
+        <color type="bool" default="true">true</color>
+        <level type="string" default="warning" desc="Log level">warning</level>
+        <file enable="true">/var/log/coolwsd.log</file>
+        <anonymize>
+            <usernames type="bool" default="false">false</usernames>
+        </anonymize>
+        <!-- Enable protocol logging for debugging co-editing issues -->
+        <protocol type="bool" default="false">false</protocol>
+    </logging>
+
+    <!-- Document settings for co-editing -->
+    <per_document desc="Per document settings">
+        <!-- Maximum concurrent editors per document -->
+        <max_concurrency desc="Maximum concurrent connections per document">100</max_concurrency>
+        
+        <!-- Batch mode for performance -->
+        <batch_priority desc="Priority for batch operations" type="uint">5</batch_priority>
+        
+        <!-- Idle timeout (30 minutes) -->
+        <idle_timeout_secs desc="Idle document timeout" type="uint">1800</idle_timeout_secs>
+        
+        <!-- Limit number of documents open -->
+        <limit_virt_mem_mb desc="Virtual memory limit per document" type="uint">0</limit_virt_mem_mb>
+        <limit_stack_mem_kb desc="Stack memory limit" type="uint">8000</limit_stack_mem_kb>
+        <limit_file_size_mb desc="File size limit" type="uint">100</limit_file_size_mb>
+        
+        <!-- Cleanup settings -->
+        <cleanup desc="Cleanup settings">
+            <cleanup_interval_ms type="uint">10000</cleanup_interval_ms>
+            <bad_behavior_period_secs type="uint">60</bad_behavior_period_secs>
+            <idle_time_secs type="uint">300</idle_time_secs>
+            <limit_dirty_mem_mb type="uint">3072</limit_dirty_mem_mb>
+            <limit_cpu_per type="uint">85</limit_cpu_per>
+            <lost_kit_grace_period_secs type="uint">120</lost_kit_grace_period_secs>
+        </cleanup>
+    </per_document>
+
+    <!-- User interface settings -->
+    <user_interface>
+        <mode type="string" default="default">default</mode>
+        <use_integration_theme type="bool" default="true">true</use_integration_theme>
+    </user_interface>
+
+    <!-- Tile cache for performance -->
+    <tile_cache_path desc="Path for tile cache" type="path" default="/tmp/coolwsd_cache/">/tmp/coolwsd_cache/</tile_cache_path>
+
+    <!-- Child process settings -->
+    <child_root_path desc="Path for child processes" type="path" default="/tmp/coolwsd_child/">/tmp/coolwsd_child/</child_root_path>
+
+    <!-- Quarantine for problematic documents -->
+    <quarantine_files desc="Quarantine settings">
+        <limit_dir_size_mb type="uint" default="250">250</limit_dir_size_mb>
+        <max_versions_to_maintain type="uint" default="2">2</max_versions_to_maintain>
+        <path type="path" default="/tmp/coolwsd_quarantine/">/tmp/coolwsd_quarantine/</path>
+        <expiry_min type="int" default="30">30</expiry_min>
+    </quarantine_files>
+
+    <!-- Remote font configuration -->
+    <remote_font_config>
+        <url desc="URL for remote fonts" type="string" default=""></url>
+    </remote_font_config>
+
+    <!-- Home mode settings -->
+    <home_mode>
+        <enable type="bool" default="false">false</enable>
+    </home_mode>
+
+    <!-- Experimental features -->
+    <experimental_features>
+        <enable type="bool" default="false">false</enable>
+    </experimental_features>
+</config>
