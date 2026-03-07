@@ -66,12 +66,12 @@ class LDAPService {
       bindDN: stripQuotes(process.env.LDAP_BIND_DN) || '',
       bindPassword: stripQuotes(process.env.LDAP_BIND_PASSWORD) || '',
       userSearchBase: stripQuotes(process.env.LDAP_USER_SEARCH_BASE) || '',
-      // Domino default filter searches by mail, cn, and shortName
-      // Standard default uses uid
-      userSearchFilter: stripQuotes(process.env.LDAP_USER_SEARCH_FILTER) ||
-        (isDominoDetected
-          ? '(|(mail={{username}})(cn={{username}})(shortName={{username}}))'
-          : '(uid={{username}})'),
+      // Domino default filter searches by mail, cn, and shortName with OR logic
+      // Standard default uses uid or mail
+      userSearchFilter: this._getDefaultFilter(
+        stripQuotes(process.env.LDAP_USER_SEARCH_FILTER),
+        isDominoDetected
+      ),
       groupSearchBase: stripQuotes(process.env.LDAP_GROUP_SEARCH_BASE) || '',
       groupSearchFilter: stripQuotes(process.env.LDAP_GROUP_SEARCH_FILTER) || '(member={{dn}})',
       // Domino uses cn as the primary username attribute
@@ -95,6 +95,11 @@ class LDAPService {
 
     if (isDominoDetected && serverType === 'auto') {
       ldapDebug('Auto-detected Domino LDAP from baseDN pattern');
+    }
+
+    // For Domino, ensure the filter uses OR logic for flexible authentication
+    if (this.config.serverType === 'domino') {
+      this.config.userSearchFilter = this._ensureDominoFilter(this.config.userSearchFilter);
     }
 
     // Validate and warn about common Domino misconfigurations
@@ -133,6 +138,78 @@ class LDAPService {
     }
 
     return sanitized;
+  }
+
+  /**
+   * Get the default filter based on environment config or server type.
+   * Detects and fixes malformed filters (wildcards, wrong logic, etc.)
+   */
+  _getDefaultFilter(envFilter, isDomino) {
+    const dominoDefault = '(|(mail={{username}})(cn={{username}})(shortName={{username}}))';
+    const standardDefault = '(|(uid={{username}})(mail={{username}}))';
+
+    // No env filter - use defaults
+    if (!envFilter || !envFilter.trim()) {
+      return isDomino ? dominoDefault : standardDefault;
+    }
+
+    let filter = envFilter.trim();
+
+    // Check if filter is malformed (contains wildcards that should be placeholders)
+    const hasWildcards = /=\s*\*\s*\)/.test(filter);
+    const hasPlaceholder = /\{\{username\}\}|\{username\}|%s|\$username/i.test(filter);
+
+    if (hasWildcards && !hasPlaceholder) {
+      logger.warn('LDAP filter contains wildcards without username placeholder - using default filter', {
+        envFilter,
+        serverType: isDomino ? 'domino' : 'standard'
+      });
+      return isDomino ? dominoDefault : standardDefault;
+    }
+
+    // Check for extra/malformed characters at the end
+    if (/\)\s*\}+\s*$/.test(filter) || /\)\s*\)+\s*\}/.test(filter)) {
+      logger.warn('LDAP filter has malformed ending - using default filter', { envFilter });
+      return isDomino ? dominoDefault : standardDefault;
+    }
+
+    return filter;
+  }
+
+  /**
+   * Ensure Domino filter uses OR logic for flexible authentication.
+   * HCL Domino users should be able to login with shortName, cn, or mail.
+   */
+  _ensureDominoFilter(filter) {
+    const dominoDefault = '(|(mail={{username}})(cn={{username}})(shortName={{username}}))';
+
+    // If filter uses AND logic (&) for user attributes, it's likely wrong for Domino
+    // AND requires ALL conditions to match, but users login with ONE identifier
+    if (filter.startsWith('(&') && !filter.startsWith('(&(objectclass')) {
+      // Check if it's using AND for multiple user identifiers (uid, mail, cn, shortName)
+      const userAttrs = ['uid=', 'mail=', 'cn=', 'shortName=', 'sAMAccountName='];
+      const attrMatches = userAttrs.filter(attr => filter.includes(attr));
+      
+      if (attrMatches.length > 1) {
+        logger.warn('Domino LDAP: Filter uses AND logic for multiple user attributes. Switching to OR logic for flexible login.', {
+          originalFilter: filter,
+          newFilter: dominoDefault
+        });
+        return dominoDefault;
+      }
+    }
+
+    // If filter doesn't include shortName for Domino, add it
+    if (!filter.includes('shortName=') && filter.includes('{{username}}')) {
+      // Only if it's using OR logic already
+      if (filter.startsWith('(|')) {
+        const enhanced = filter.replace(/\)\)$/, ')(shortName={{username}}))');
+        ldapDebug('Enhanced Domino filter with shortName', { original: filter, enhanced });
+        return enhanced;
+      }
+    }
+
+    return filter;
   }
 
   /**
