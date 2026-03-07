@@ -6,6 +6,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Editor from './pages/Editor';
 import Settings from './pages/Settings';
+import SharedView from './pages/SharedView';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="/edit/:fileId" element={<PrivateRoute><Editor /></PrivateRoute>} />
+      <Route path="/shared/:shareToken" element={<SharedView />} />
     </Routes>
   );
 }
