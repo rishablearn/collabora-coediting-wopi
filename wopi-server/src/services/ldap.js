@@ -732,6 +732,86 @@ class LDAPService {
   }
 
   /**
+   * Domino fallback search - try individual attribute searches
+   * HCL Domino may have users indexed differently, so we try multiple approaches
+   */
+  async _dominoFallbackSearch(client, username) {
+    const escapedUsername = this.escapeLDAPFilter(username);
+    const searchBase = this._buildSearchBase();
+    const attributes = this._getSearchAttributes();
+
+    // List of fallback filters to try for Domino
+    // Order: mail (most common for email login), internetAddress, shortName, cn
+    const fallbackFilters = [
+      { attr: 'mail', filter: `(mail=${escapedUsername})` },
+      { attr: 'internetAddress', filter: `(internetAddress=${escapedUsername})` },
+      { attr: 'shortName', filter: `(shortName=${escapedUsername})` },
+      { attr: 'cn', filter: `(cn=${escapedUsername})` },
+      // Try with objectClass constraint
+      { attr: 'mail+inetOrgPerson', filter: `(&(mail=${escapedUsername})(objectClass=inetOrgPerson))` },
+      { attr: 'mail+dominoPerson', filter: `(&(mail=${escapedUsername})(objectClass=dominoPerson))` },
+      { attr: 'mail+person', filter: `(&(mail=${escapedUsername})(objectClass=person))` },
+    ];
+
+    for (const fb of fallbackFilters) {
+      ldapDebug(`Trying fallback search: ${fb.attr}`, { filter: fb.filter });
+      
+      try {
+        const user = await this._searchWithFilter(client, searchBase, fb.filter, attributes, username);
+        if (user) {
+          logger.info('Domino fallback search succeeded', { attribute: fb.attr, username });
+          return user;
+        }
+      } catch (err) {
+        ldapDebug(`Fallback search failed for ${fb.attr}`, { error: err.message });
+      }
+    }
+
+    ldapDebug('All Domino fallback searches exhausted, user not found');
+    return null;
+  }
+
+  /**
+   * Search with a specific filter (used by fallback search)
+   */
+  async _searchWithFilter(client, searchBase, filter, attributes, loginUsername) {
+    return new Promise((resolve, reject) => {
+      const opts = {
+        filter,
+        scope: 'sub',
+        attributes,
+        sizeLimit: 5,
+        timeLimit: 10
+      };
+
+      client.search(searchBase, opts, (err, res) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        let user = null;
+        let entriesFound = 0;
+
+        res.on('searchEntry', (entry) => {
+          entriesFound++;
+          if (entriesFound === 1) {
+            user = this._parseEntry(entry, loginUsername);
+          }
+        });
+
+        res.on('error', (err) => {
+          reject(err);
+        });
+
+        res.on('end', () => {
+          resolve(user);
+        });
+      });
+    });
+  }
+
+  /**
    * Authenticate user with LDAP credentials.
    * Flow: service bind -> search user -> bind as user
    */
@@ -757,7 +837,13 @@ class LDAPService {
       // Phase 2: Search for user
       phase = 'user-search';
       ldapDebug('Phase 2: Search for user');
-      const user = await this.searchUser(client, username);
+      let user = await this.searchUser(client, username);
+
+      // For Domino: If user not found with combined filter, try fallback searches
+      if (!user && this.config.serverType === 'domino') {
+        ldapDebug('User not found with primary filter, trying Domino fallback searches');
+        user = await this._dominoFallbackSearch(client, username);
+      }
 
       if (!user) {
         ldapDebug('User not found in LDAP', { username });
