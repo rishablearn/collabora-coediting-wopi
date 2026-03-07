@@ -82,7 +82,7 @@ router.post('/register', registerValidation, async (req, res) => {
     // Create root folder for user (non-critical, don't fail registration if this fails)
     try {
       await pool.query(
-        'INSERT INTO folders (owner_id, name) VALUES ($1, $2)',
+        'INSERT INTO folders (owner_id, name, parent_id) VALUES ($1, $2, NULL) ON CONFLICT (owner_id, name, parent_id) DO NOTHING',
         [user.id, 'My Documents']
       );
     } catch (folderErr) {
@@ -323,10 +323,14 @@ async function findOrCreateLDAPUser(ldapUser) {
 
     // Create root folder for new user
     if (result.rows.length > 0) {
-      await pool.query(
-        'INSERT INTO folders (owner_id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [result.rows[0].id, 'My Documents']
-      );
+      try {
+        await pool.query(
+          'INSERT INTO folders (owner_id, name, parent_id) VALUES ($1, $2, NULL) ON CONFLICT (owner_id, name, parent_id) DO NOTHING',
+          [result.rows[0].id, 'My Documents']
+        );
+      } catch (folderErr) {
+        logger.warn('Could not create root folder for LDAP user', { error: folderErr.message });
+      }
     }
 
     return result.rows[0];

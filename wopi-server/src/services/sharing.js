@@ -202,32 +202,55 @@ class SharingService {
    * Record user session for co-editing tracking
    */
   async recordSession(userId, fileId, sessionToken, ipAddress, userAgent) {
-    await pool.query(
-      `INSERT INTO active_sessions (user_id, file_id, session_token, ip_address, user_agent, last_activity)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (session_token) DO UPDATE SET last_activity = NOW()`,
-      [userId, fileId, sessionToken, ipAddress, userAgent]
-    );
+    try {
+      await pool.query(
+        `INSERT INTO active_sessions (user_id, file_id, session_token, ip_address, user_agent, last_activity)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (session_token) DO UPDATE SET 
+           last_activity = NOW(),
+           file_id = EXCLUDED.file_id,
+           ip_address = EXCLUDED.ip_address,
+           user_agent = EXCLUDED.user_agent`,
+        [userId, fileId, sessionToken, ipAddress, userAgent]
+      );
+    } catch (error) {
+      // Log but don't throw - session tracking is non-critical
+      logger.warn('Failed to record session', { 
+        userId, 
+        fileId, 
+        error: error.message,
+        code: error.code 
+      });
+    }
   }
 
   /**
    * Update session activity
    */
   async updateSessionActivity(sessionToken) {
-    await pool.query(
-      'UPDATE active_sessions SET last_activity = NOW() WHERE session_token = $1',
-      [sessionToken]
-    );
+    try {
+      await pool.query(
+        'UPDATE active_sessions SET last_activity = NOW() WHERE session_token = $1',
+        [sessionToken]
+      );
+    } catch (error) {
+      logger.warn('Failed to update session activity', { sessionToken, error: error.message });
+    }
   }
 
   /**
    * Clean up expired sessions
    */
   async cleanupExpiredSessions() {
-    const result = await pool.query(
-      "DELETE FROM active_sessions WHERE last_activity < NOW() - INTERVAL '1 hour' RETURNING id"
-    );
-    return result.rowCount;
+    try {
+      const result = await pool.query(
+        "DELETE FROM active_sessions WHERE last_activity < NOW() - INTERVAL '1 hour' RETURNING id"
+      );
+      return result.rowCount;
+    } catch (error) {
+      logger.warn('Failed to cleanup expired sessions', { error: error.message });
+      return 0;
+    }
   }
 
   /**

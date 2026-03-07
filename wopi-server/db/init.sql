@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS active_sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     file_id UUID REFERENCES files(id) ON DELETE CASCADE,
-    session_token VARCHAR(255) NOT NULL,
+    session_token VARCHAR(255) NOT NULL UNIQUE,
     ip_address VARCHAR(45),
     user_agent TEXT,
     started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -162,3 +162,17 @@ CREATE TRIGGER update_folders_updated_at
     BEFORE UPDATE ON folders
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- Migration: Add unique constraint to session_token if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'active_sessions_session_token_key'
+    ) THEN
+        ALTER TABLE active_sessions ADD CONSTRAINT active_sessions_session_token_key UNIQUE (session_token);
+    END IF;
+EXCEPTION
+    WHEN duplicate_table THEN NULL;
+    WHEN duplicate_object THEN NULL;
+END $$;

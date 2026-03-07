@@ -120,10 +120,15 @@ async function findOrCreateLTPAUser(ltpaUser, authSource = 'ltpa') {
 
     // Create root folder for new user
     if (result.rows.length > 0) {
-      await pool.query(
-        'INSERT INTO folders (owner_id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [result.rows[0].id, 'My Documents']
-      );
+      try {
+        await pool.query(
+          'INSERT INTO folders (owner_id, name, parent_id) VALUES ($1, $2, NULL) ON CONFLICT (owner_id, name, parent_id) DO NOTHING',
+          [result.rows[0].id, 'My Documents']
+        );
+      } catch (folderErr) {
+        // Ignore folder creation errors - non-critical
+        logger.warn('Could not create root folder for LTPA user', { error: folderErr.message });
+      }
     }
 
     logger.info('Created user from LTPA', { username: ltpaUser.username, authSource });

@@ -14,7 +14,7 @@ services:
       - password=${COLLABORA_ADMIN_PASSWORD:-admin123}
       - server_name=${DOMAIN:-localhost}
       - dictionaries=en_US,en_GB
-      - extra_params=--o:ssl.enable=false --o:ssl.termination=true --o:net.frame_ancestors=${DOMAIN:-localhost} --o:logging.level=warning --o:storage.wopi.host[0]=nginx --o:storage.ssl.enable=false --o:net.proto=IPv4
+      - extra_params=--o:ssl.enable=false --o:ssl.termination=true --o:net.frame_ancestors=${DOMAIN:-localhost} --o:logging.level=warning --o:storage.wopi.host[0]=wopi-server --o:storage.wopi.host[1]=nginx --o:storage.wopi.host[2]=${DOMAIN:-localhost} --o:storage.ssl.enable=false --o:net.proto=IPv4
     extra_hosts:
       - "${DOMAIN:-localhost}:host-gateway"
     networks:

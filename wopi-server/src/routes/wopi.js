@@ -98,17 +98,26 @@ router.get('/files/:fileId', async (req, res) => {
     const isLocked = lockResult.rows.length > 0;
     const lockId = isLocked ? lockResult.rows[0].lock_id : null;
 
-    // Get active editors for co-editing awareness
-    const activeEditors = await sharingService.getActiveEditors(fileId);
+    // Get active editors for co-editing awareness (non-critical)
+    let activeEditors = [];
+    try {
+      activeEditors = await sharingService.getActiveEditors(fileId);
+    } catch (editorErr) {
+      logger.warn('Failed to get active editors', { fileId, error: editorErr.message });
+    }
 
-    // Record this session for co-editing tracking
-    await sharingService.recordSession(
-      tokenData.userId,
-      fileId,
-      tokenData.sessionId || accessToken.substring(0, 32),
-      req.ip,
-      req.headers['user-agent']
-    );
+    // Record this session for co-editing tracking (non-critical)
+    try {
+      await sharingService.recordSession(
+        tokenData.userId,
+        fileId,
+        tokenData.sessionId || accessToken.substring(0, 32),
+        req.ip,
+        req.headers['user-agent']
+      );
+    } catch (sessionErr) {
+      logger.warn('Failed to record session', { fileId, error: sessionErr.message });
+    }
 
     // Build WOPI response with co-editing support
     const response = {
