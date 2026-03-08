@@ -355,10 +355,11 @@ router.post('/files/:fileId/contents', express.raw({ type: '*/*', limit: '100mb'
 });
 
 /**
- * WOPI Lock operations
+ * WOPI Lock operations and PUT_RELATIVE (SaveAs)
  * POST /wopi/files/:fileId
+ * Note: express.raw() is needed for PUT_RELATIVE which sends file content in body
  */
-router.post('/files/:fileId', async (req, res) => {
+router.post('/files/:fileId', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
   try {
     const { fileId } = req.params;
     const accessToken = req.query.access_token;

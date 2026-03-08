@@ -439,20 +439,27 @@ router.get('/:id/edit', async (req, res) => {
     const file = result.rows[0];
 
     // Check access and determine permission
-    let permission = 'view';
+    // Default to edit - documents should open in edit mode by default
+    let permission = 'edit';
+    
     if (file.owner_id === req.user.id) {
+      // Owner always has edit permission
       permission = 'edit';
     } else {
+      // Check share permissions for non-owners
       const shareResult = await pool.query(
         'SELECT permission FROM file_shares WHERE file_id = $1 AND shared_with = $2',
         [file.id, req.user.id]
       );
       if (shareResult.rows.length > 0) {
-        permission = shareResult.rows[0].permission;
+        // Use share permission (could be 'view' or 'edit')
+        permission = shareResult.rows[0].permission === 'view' ? 'view' : 'edit';
       } else {
         return res.status(403).json({ error: 'Access denied' });
       }
     }
+    
+    logger.info('Edit URL requested', { fileId: file.id, userId: req.user.id, permission });
 
     // Generate WOPI access token with user info for co-editing
     const accessToken = generateAccessToken(file.id, req.user.id, permission, {

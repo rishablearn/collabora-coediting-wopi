@@ -177,13 +177,14 @@ async function buildEditorUrl(fileId, fileName, accessToken, permission = 'edit'
   // Get extension from filename
   const ext = fileName.split('.').pop().toLowerCase();
   
-  // Try to get URL from discovery
-  const action = permission === 'view' ? 'view' : 'edit';
-  let editorUrlTemplate = await getEditorUrl(ext, action);
+  // Always try edit action first - Collabora will respect UserCanWrite from CheckFileInfo
+  // The edit URL works for both edit and view modes based on WOPI response
+  let editorUrlTemplate = await getEditorUrl(ext, 'edit');
   
-  // If no edit action, try view
-  if (!editorUrlTemplate && action === 'edit') {
+  // Fallback to view action only if edit not available
+  if (!editorUrlTemplate) {
     editorUrlTemplate = await getEditorUrl(ext, 'view');
+    logger.debug('Using view action URL as fallback', { ext });
   }
   
   if (editorUrlTemplate) {
