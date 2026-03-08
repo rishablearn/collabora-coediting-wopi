@@ -10,7 +10,8 @@ import {
   X,
   FileText,
   ChevronDown,
-  Shield
+  Shield,
+  Activity
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
@@ -43,6 +44,7 @@ export default function Layout() {
 
   const navLinks = [
     { to: '/', label: text.documentsLabel || 'Documents', icon: FileText },
+    { to: '/activity', label: 'Activity', icon: Activity },
     { to: '/settings', label: text.settingsLabel || 'Settings', icon: Settings },
   ];
 

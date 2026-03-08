@@ -147,6 +147,23 @@ router.get('/files/:fileId', async (req, res) => {
       logger.warn('Failed to record session', { fileId, error: sessionErr.message });
     }
 
+    // Get user display name from database if not in token
+    let userDisplayName = tokenData.displayName;
+    if (!userDisplayName || userDisplayName === 'Unknown User') {
+      try {
+        const userResult = await pool.query(
+          'SELECT display_name, username, email FROM users WHERE id = $1',
+          [tokenData.userId]
+        );
+        if (userResult.rows.length > 0) {
+          const user = userResult.rows[0];
+          userDisplayName = user.display_name || user.username || user.email || 'User';
+        }
+      } catch (err) {
+        logger.warn('Failed to get user display name', { userId: tokenData.userId, error: err.message });
+      }
+    }
+    
     // Build WOPI response with co-editing support
     const response = {
       // Basic file info
@@ -160,8 +177,9 @@ router.get('/files/:fileId', async (req, res) => {
       FileUniqueId: generateFileUniqueId(fileId, file.version),
       
       // User identification (from LTPA/LDAP if available)
+      // UserFriendlyName is shown in Collabora's editor UI for co-editing
       UserId: tokenData.userId,
-      UserFriendlyName: tokenData.displayName || file.owner_name || 'User',
+      UserFriendlyName: userDisplayName || file.owner_name || 'User',
       UserExtraInfo: {
         email: tokenData.email || '',
         authSource: tokenData.authSource || 'local',

@@ -8,6 +8,7 @@ import Editor from './pages/Editor';
 import Settings from './pages/Settings';
 import SharedView from './pages/SharedView';
 import SystemAdmin from './pages/SystemAdmin';
+import AuditLogs from './pages/AuditLogs';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -50,6 +51,7 @@ export default function App() {
       <Route path="/edit/:fileId" element={<PrivateRoute><Editor /></PrivateRoute>} />
       <Route path="/shared/:shareToken" element={<SharedView />} />
       <Route path="/system" element={<PrivateRoute><SystemAdmin /></PrivateRoute>} />
+      <Route path="/activity" element={<PrivateRoute><AuditLogs /></PrivateRoute>} />
     </Routes>
   );
 }
