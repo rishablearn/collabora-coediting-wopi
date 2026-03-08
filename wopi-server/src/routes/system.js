@@ -36,6 +36,35 @@ function getAdminGroupPatterns() {
 const ADMIN_GROUP_PATTERNS = getAdminGroupPatterns();
 logger.info('System admin group patterns configured', { patterns: ADMIN_GROUP_PATTERNS });
 
+// Ensure ldap_groups column exists (run migration if needed)
+async function ensureLdapGroupsColumn() {
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'users' AND column_name = 'ldap_groups'
+        ) THEN
+          ALTER TABLE users ADD COLUMN ldap_groups TEXT[] DEFAULT '{}';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'users' AND column_name = 'system_admin'
+        ) THEN
+          ALTER TABLE users ADD COLUMN system_admin BOOLEAN DEFAULT false;
+        END IF;
+      END $$;
+    `);
+    logger.info('Database columns verified/created: ldap_groups, system_admin');
+  } catch (err) {
+    logger.warn('Could not verify database columns', { error: err.message });
+  }
+}
+
+// Run migration on module load
+ensureLdapGroupsColumn();
+
 /**
  * Extract simple group name from LDAP DN format
  * Handles: "CN=LocalDomainAdmins", "CN=LocalDomainAdmins,O=Org", "LocalDomainAdmins"
@@ -123,14 +152,19 @@ async function requireSystemAdmin(req, res, next) {
       }
     }
 
-    // Check cached group membership from user record
-    const groupResult = await pool.query(
-      'SELECT ldap_groups FROM users WHERE id = $1',
-      [req.user.id]
-    );
-    
-    const cachedGroups = groupResult.rows[0]?.ldap_groups || [];
-    logger.info('Checking cached groups', { username: req.user.username, cachedGroups });
+    // Check cached group membership from user record (with fallback if column doesn't exist)
+    let cachedGroups = [];
+    try {
+      const groupResult = await pool.query(
+        'SELECT ldap_groups FROM users WHERE id = $1',
+        [req.user.id]
+      );
+      cachedGroups = groupResult.rows[0]?.ldap_groups || [];
+      logger.info('Checking cached groups', { username: req.user.username, cachedGroups });
+    } catch (dbErr) {
+      // Column might not exist yet - that's okay
+      logger.warn('Could not read cached groups (column may not exist)', { error: dbErr.message });
+    }
     
     if (cachedGroups.length > 0) {
       const hasAdminGroup = cachedGroups.some(g => isAdminGroup(g));
@@ -147,13 +181,19 @@ async function requireSystemAdmin(req, res, next) {
       logger.info('Fresh LDAP groups retrieved', { username: req.user.username, groups: userGroups });
       
       if (userGroups && userGroups.length > 0) {
-        // Cache the groups for future use
-        await pool.query(
-          'UPDATE users SET ldap_groups = $1 WHERE id = $2',
-          [userGroups, req.user.id]
-        );
-        
+        // Check if user is in admin group
         const hasAdminGroup = userGroups.some(g => isAdminGroup(g));
+        
+        // Try to cache the groups for future use (ignore errors)
+        try {
+          await pool.query(
+            'UPDATE users SET ldap_groups = $1 WHERE id = $2',
+            [userGroups, req.user.id]
+          );
+        } catch (cacheErr) {
+          logger.warn('Could not cache LDAP groups', { error: cacheErr.message });
+        }
+        
         if (hasAdminGroup) {
           req.isSystemAdmin = true;
           logger.info('System admin access granted via fresh LDAP groups', { username: req.user.username });
@@ -236,18 +276,22 @@ router.get('/access-check', async (req, res) => {
       
       // Check cached groups if LDAP failed
       if (!hasAccess) {
-        const groupResult = await pool.query(
-          'SELECT ldap_groups FROM users WHERE id = $1',
-          [req.user.id]
-        );
-        
-        const cachedGroups = groupResult.rows[0]?.ldap_groups || [];
-        if (cachedGroups.length > 0) {
-          userGroups = cachedGroups;
-          if (cachedGroups.some(g => isAdminGroup(g))) {
-            hasAccess = true;
-            reason = 'Cached group membership';
+        try {
+          const groupResult = await pool.query(
+            'SELECT ldap_groups FROM users WHERE id = $1',
+            [req.user.id]
+          );
+          
+          const cachedGroups = groupResult.rows[0]?.ldap_groups || [];
+          if (cachedGroups.length > 0) {
+            userGroups = cachedGroups;
+            if (cachedGroups.some(g => isAdminGroup(g))) {
+              hasAccess = true;
+              reason = 'Cached group membership';
+            }
           }
+        } catch (dbErr) {
+          logger.warn('Could not read cached groups', { error: dbErr.message });
         }
       }
     }
