@@ -274,13 +274,17 @@ router.post('/files/:fileId/contents', express.raw({ type: '*/*', limit: '100mb'
     const accessToken = req.query.access_token;
     const wopiLock = req.headers['x-wopi-lock'];
 
+    logger.info('PutFile request', { fileId, hasBody: !!req.body, bodyLength: req.body?.length });
+    
     if (!accessToken) {
-      return res.status(401).json({ error: 'Access token required' });
+      logger.warn('PutFile: No access token');
+      return res.status(401).end();
     }
 
     const tokenData = verifyAccessToken(accessToken);
     if (!tokenData || (tokenData.permissions !== 'edit' && tokenData.permissions !== 'admin')) {
-      return res.status(401).json({ error: 'No edit permission' });
+      logger.warn('PutFile: No edit permission', { permissions: tokenData?.permissions });
+      return res.status(401).end();
     }
 
     // Get file info
@@ -290,12 +294,13 @@ router.post('/files/:fileId/contents', express.raw({ type: '*/*', limit: '100mb'
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'File not found' });
+      logger.warn('PutFile: File not found', { fileId });
+      return res.status(404).end();
     }
 
     const file = result.rows[0];
 
-    // Check lock
+    // Check lock - but allow save if no lock or lock matches
     const lockResult = await pool.query(
       'SELECT * FROM file_locks WHERE file_id = $1 AND expires_at > NOW()',
       [fileId]
@@ -303,9 +308,11 @@ router.post('/files/:fileId/contents', express.raw({ type: '*/*', limit: '100mb'
 
     if (lockResult.rows.length > 0) {
       const existingLock = lockResult.rows[0];
-      if (existingLock.lock_id !== wopiLock) {
+      // Only reject if there's a lock mismatch AND a lock was provided
+      if (wopiLock && existingLock.lock_id !== wopiLock) {
+        logger.warn('PutFile: Lock mismatch', { fileId, expected: existingLock.lock_id, got: wopiLock });
         res.set('X-WOPI-Lock', existingLock.lock_id);
-        return res.status(409).json({ error: 'Lock mismatch' });
+        return res.status(409).end();
       }
     }
 
@@ -346,11 +353,15 @@ router.post('/files/:fileId/contents', express.raw({ type: '*/*', limit: '100mb'
       [tokenData.userId, 'FILE_UPDATE', 'file', fileId, JSON.stringify({ version: newVersion })]
     );
 
+    logger.info('PutFile success', { fileId, newVersion, size: stats.size });
+    
+    // WOPI spec: PutFile returns 200 OK with empty body
     res.set('X-WOPI-ItemVersion', newVersion.toString());
-    res.status(200).json({ message: 'File saved' });
+    res.status(200).end();
   } catch (error) {
-    logger.error('PutFile error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    logger.error('PutFile error:', { error: error.message, stack: error.stack });
+    // Return 500 with empty body for WOPI compliance
+    res.status(500).end();
   }
 });
 
@@ -428,6 +439,8 @@ router.post('/files/:fileId', express.raw({ type: '*/*', limit: '100mb' }), asyn
 });
 
 async function handleLock(fileId, lockId, tokenData, res) {
+  logger.info('WOPI Lock', { fileId, lockId });
+  
   // Check existing lock
   const lockResult = await pool.query(
     'SELECT * FROM file_locks WHERE file_id = $1 AND expires_at > NOW()',
@@ -443,10 +456,10 @@ async function handleLock(fileId, lockId, tokenData, res) {
         [fileId]
       );
       res.set('X-WOPI-Lock', lockId);
-      return res.status(200).json({ message: 'Lock refreshed' });
+      return res.status(200).end();
     } else {
       res.set('X-WOPI-Lock', existingLock.lock_id);
-      return res.status(409).json({ error: 'File already locked' });
+      return res.status(409).end();
     }
   }
 
@@ -459,7 +472,7 @@ async function handleLock(fileId, lockId, tokenData, res) {
   );
 
   res.set('X-WOPI-Lock', lockId);
-  res.status(200).json({ message: 'Locked' });
+  res.status(200).end();
 }
 
 async function handleGetLock(fileId, res) {
@@ -474,10 +487,12 @@ async function handleGetLock(fileId, res) {
     res.set('X-WOPI-Lock', '');
   }
 
-  res.status(200).json({ message: 'OK' });
+  res.status(200).end();
 }
 
 async function handleRefreshLock(fileId, lockId, res) {
+  logger.info('WOPI RefreshLock', { fileId, lockId });
+  
   const lockResult = await pool.query(
     'SELECT * FROM file_locks WHERE file_id = $1 AND expires_at > NOW()',
     [fileId]
@@ -485,13 +500,13 @@ async function handleRefreshLock(fileId, lockId, res) {
 
   if (lockResult.rows.length === 0) {
     res.set('X-WOPI-Lock', '');
-    return res.status(409).json({ error: 'No lock found' });
+    return res.status(409).end();
   }
 
   const existingLock = lockResult.rows[0];
   if (existingLock.lock_id !== lockId) {
     res.set('X-WOPI-Lock', existingLock.lock_id);
-    return res.status(409).json({ error: 'Lock mismatch' });
+    return res.status(409).end();
   }
 
   await pool.query(
@@ -500,10 +515,12 @@ async function handleRefreshLock(fileId, lockId, res) {
   );
 
   res.set('X-WOPI-Lock', lockId);
-  res.status(200).json({ message: 'Lock refreshed' });
+  res.status(200).end();
 }
 
 async function handleUnlock(fileId, lockId, res) {
+  logger.info('WOPI Unlock', { fileId, lockId });
+  
   const lockResult = await pool.query(
     'SELECT * FROM file_locks WHERE file_id = $1',
     [fileId]
@@ -511,19 +528,19 @@ async function handleUnlock(fileId, lockId, res) {
 
   if (lockResult.rows.length === 0) {
     res.set('X-WOPI-Lock', '');
-    return res.status(200).json({ message: 'No lock to remove' });
+    return res.status(200).end();
   }
 
   const existingLock = lockResult.rows[0];
   if (existingLock.lock_id !== lockId) {
     res.set('X-WOPI-Lock', existingLock.lock_id);
-    return res.status(409).json({ error: 'Lock mismatch' });
+    return res.status(409).end();
   }
 
   await pool.query('DELETE FROM file_locks WHERE file_id = $1', [fileId]);
 
   res.set('X-WOPI-Lock', '');
-  res.status(200).json({ message: 'Unlocked' });
+  res.status(200).end();
 }
 
 async function handleRename(fileId, newName, tokenData, res) {
@@ -546,6 +563,8 @@ async function handleRename(fileId, newName, tokenData, res) {
 }
 
 async function handleDelete(fileId, tokenData, res) {
+  logger.info('WOPI Delete', { fileId });
+  
   await pool.query(
     'UPDATE files SET is_deleted = true WHERE id = $1',
     [fileId]
@@ -557,7 +576,7 @@ async function handleDelete(fileId, tokenData, res) {
     [tokenData.userId, 'FILE_DELETE', 'file', fileId]
   );
 
-  res.status(200).json({ message: 'Deleted' });
+  res.status(200).end();
 }
 
 /**
@@ -566,6 +585,14 @@ async function handleDelete(fileId, tokenData, res) {
  */
 async function handlePutRelative(fileId, req, tokenData, res) {
   try {
+    logger.info('PUT_RELATIVE request', { 
+      fileId, 
+      hasBody: !!req.body, 
+      bodyLength: req.body?.length,
+      suggestedTarget: req.headers['x-wopi-suggestedtarget'],
+      relativeTarget: req.headers['x-wopi-relativetarget']
+    });
+    
     const suggestedTarget = req.headers['x-wopi-suggestedtarget'];
     const relativeTarget = req.headers['x-wopi-relativetarget'];
     const overwriteRelative = req.headers['x-wopi-overwriterelativetarget'] === 'true';
@@ -717,6 +744,8 @@ async function handlePutRelative(fileId, req, tokenData, res) {
  * Atomically unlocks with old lock and creates new lock
  */
 async function handleUnlockAndRelock(fileId, oldLockId, newLockId, tokenData, res) {
+  logger.info('WOPI UnlockAndRelock', { fileId, oldLockId, newLockId });
+  
   // Check existing lock matches old lock
   const lockResult = await pool.query(
     'SELECT * FROM file_locks WHERE file_id = $1 AND expires_at > NOW()',
@@ -732,14 +761,14 @@ async function handleUnlockAndRelock(fileId, oldLockId, newLockId, tokenData, re
       [fileId, newLockId, tokenData.userId]
     );
     res.set('X-WOPI-Lock', newLockId);
-    return res.status(200).json({ message: 'Lock created' });
+    return res.status(200).end();
   }
 
   const existingLock = lockResult.rows[0];
   if (existingLock.lock_id !== oldLockId) {
     // Old lock doesn't match
     res.set('X-WOPI-Lock', existingLock.lock_id);
-    return res.status(409).json({ error: 'Lock mismatch' });
+    return res.status(409).end();
   }
 
   // Replace lock atomically
@@ -751,7 +780,7 @@ async function handleUnlockAndRelock(fileId, oldLockId, newLockId, tokenData, re
   logger.info('UNLOCK_AND_RELOCK completed', { fileId, oldLockId, newLockId, userId: tokenData.userId });
 
   res.set('X-WOPI-Lock', newLockId);
-  res.status(200).json({ message: 'Lock replaced' });
+  res.status(200).end();
 }
 
 /**
@@ -760,7 +789,12 @@ async function handleUnlockAndRelock(fileId, oldLockId, newLockId, tokenData, re
  */
 async function handlePutUserInfo(fileId, req, tokenData, res) {
   try {
-    const userInfo = req.body ? JSON.parse(req.body.toString()) : {};
+    let userInfo = {};
+    try {
+      userInfo = req.body ? JSON.parse(req.body.toString()) : {};
+    } catch (e) {
+      // Body might not be JSON
+    }
     
     // Update session with user info
     await pool.query(
@@ -770,12 +804,12 @@ async function handlePutUserInfo(fileId, req, tokenData, res) {
       [tokenData.userId, fileId]
     );
 
-    logger.info('PUT_USER_INFO completed', { fileId, userId: tokenData.userId, userInfo });
+    logger.info('PUT_USER_INFO completed', { fileId, userId: tokenData.userId });
 
-    res.status(200).json({ message: 'User info updated' });
+    res.status(200).end();
   } catch (error) {
     logger.error('PUT_USER_INFO error:', error);
-    res.status(200).json({ message: 'OK' }); // WOPI spec says to return 200 even on error
+    res.status(200).end(); // WOPI spec says to return 200 even on error
   }
 }
 
