@@ -78,16 +78,25 @@ router.get('/files/:fileId', async (req, res) => {
     const shareToken = tokenData.shareToken || null;
     const accessInfo = await sharingService.checkFileAccess(fileId, tokenData.userId, shareToken);
     
-    // Determine edit capability
-    // For share-based access, use token permissions directly
-    // For authenticated access, also check accessInfo.canWrite
-    const isShareAccess = tokenData.authSource === 'authenticated_share' || tokenData.authSource === 'anonymous_share' || tokenData.authSource === 'share';
-    const tokenHasEdit = tokenData.permissions === 'edit' || tokenData.permissions === 'admin';
-    
-    // If accessing via share link with edit permission, allow editing
-    // Otherwise, require both token permission AND accessInfo.canWrite
-    const canEdit = isShareAccess ? tokenHasEdit : (tokenHasEdit && accessInfo.canWrite);
+    // Determine if user is owner
     const isOwner = tokenData.userId === file.owner_id;
+    
+    // Determine edit capability
+    const tokenHasEdit = tokenData.permissions === 'edit' || tokenData.permissions === 'admin';
+    const isShareAccess = tokenData.authSource === 'authenticated_share' || tokenData.authSource === 'anonymous_share' || tokenData.authSource === 'share';
+    
+    // Edit permission logic:
+    // 1. Owner always can edit if token has edit permission
+    // 2. Share-based access: use token permissions directly
+    // 3. Other authenticated users: require both token AND accessInfo permission
+    let canEdit = false;
+    if (isOwner && tokenHasEdit) {
+      canEdit = true;  // Owner always gets edit if token says so
+    } else if (isShareAccess && tokenHasEdit) {
+      canEdit = true;  // Share-based access with edit permission
+    } else if (tokenHasEdit && accessInfo.canWrite) {
+      canEdit = true;  // Other authenticated users with proper permissions
+    }
     
     logger.info('WOPI CheckFileInfo permissions', {
       fileId,
