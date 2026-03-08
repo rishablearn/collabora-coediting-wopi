@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import { FileText, Download, AlertCircle } from 'lucide-react';
+import { FileText, Download, AlertCircle, LogIn, Lock } from 'lucide-react';
 
 export default function SharedView() {
   const { shareToken } = useParams();
@@ -11,6 +11,8 @@ export default function SharedView() {
   const [editUrl, setEditUrl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [requiresAuth, setRequiresAuth] = useState(false);
+  const [shareInfo, setShareInfo] = useState(null);
 
   // Handle PostMessage from Collabora
   const handleCollaboraMessage = useCallback((event) => {
@@ -34,22 +36,43 @@ export default function SharedView() {
   useEffect(() => {
     const fetchSharedFile = async () => {
       try {
+        // First, check if auth is required
+        const infoResponse = await api.get(`/shared/${shareToken}/info`);
+        setShareInfo(infoResponse.data);
+        
+        // If auth required and user not logged in, show auth prompt
+        if (infoResponse.data.requiresAuth) {
+          const token = localStorage.getItem('token');
+          if (!token) {
+            setRequiresAuth(true);
+            setLoading(false);
+            return;
+          }
+        }
+
+        // Fetch the actual share with editor URL
         const response = await api.get(`/shared/${shareToken}`);
         setFile({
           id: response.data.fileId,
           name: response.data.fileName,
-          permission: response.data.permission
+          permission: response.data.permission,
+          user: response.data.user
         });
         setEditUrl(response.data.editUrl);
       } catch (err) {
         if (err.response?.status === 404) {
           setError('This shared link is invalid or has expired');
         } else if (err.response?.status === 401) {
-          setError('This shared link requires authentication');
+          // Auth required - redirect to login with return URL
+          if (err.response?.data?.requiresAuth) {
+            setRequiresAuth(true);
+          } else {
+            setError('Your session has expired. Please sign in again.');
+          }
         } else {
           setError(err.response?.data?.error || 'Failed to load shared document');
+          toast.error('Failed to load shared document');
         }
-        toast.error('Failed to load shared document');
       } finally {
         setLoading(false);
       }
@@ -85,6 +108,55 @@ export default function SharedView() {
     );
   }
 
+  // Handle sign in - redirect to login with return URL
+  const handleSignIn = () => {
+    // Store the current share URL to return after login
+    sessionStorage.setItem('returnUrl', `/shared/${shareToken}`);
+    navigate('/login');
+  };
+
+  // Authentication required screen
+  if (requiresAuth) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Lock className="h-8 w-8 text-primary-600" />
+          </div>
+          
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Sign In Required</h2>
+          <p className="text-gray-600 mb-6">
+            To edit this document, you need to sign in with your account. This ensures your changes are tracked and you can collaborate with others.
+          </p>
+
+          {shareInfo && (
+            <div className="bg-gray-50 rounded-lg p-4 mb-6 text-left">
+              <div className="flex items-center gap-3">
+                <FileText className="h-10 w-10 text-primary-500" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-gray-900 truncate">{shareInfo.fileName}</p>
+                  <p className="text-sm text-gray-500">Shared by {shareInfo.ownerName}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={handleSignIn}
+            className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-medium transition-colors"
+          >
+            <LogIn className="h-5 w-5" />
+            Sign In to Edit
+          </button>
+
+          <p className="mt-4 text-sm text-gray-500">
+            After signing in, you'll be redirected back to this document.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
@@ -93,7 +165,7 @@ export default function SharedView() {
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Unable to Load Document</h2>
           <p className="text-gray-600 mb-6">{error}</p>
           <button
-            onClick={() => navigate('/login')}
+            onClick={handleSignIn}
             className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
           >
             Sign In

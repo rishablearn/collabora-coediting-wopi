@@ -23,7 +23,15 @@ export default function Login() {
     try {
       await login(identifier, password);
       toast.success('Welcome back!');
-      navigate('/');
+      
+      // Check for return URL (e.g., from shared edit link)
+      const returnUrl = sessionStorage.getItem('returnUrl');
+      if (returnUrl) {
+        sessionStorage.removeItem('returnUrl');
+        navigate(returnUrl);
+      } else {
+        navigate('/');
+      }
     } catch (error) {
       const errMsg = error.response?.data?.error || 'Login failed';
       const hint = error.response?.data?.hint;
