@@ -1007,10 +1007,33 @@ class LDAPService {
   }
 
   /**
+   * Extract the simple group name from various LDAP group formats
+   * Handles: "CN=LocalDomainAdmins", "CN=LocalDomainAdmins,O=Org", "LocalDomainAdmins"
+   */
+  _extractGroupName(groupDN) {
+    if (!groupDN) return '';
+    
+    // Try to extract CN value first (works for both AD and Domino)
+    // Domino format: CN=LocalDomainAdmins or CN=LocalDomainAdmins,O=OrgName
+    // AD format: CN=Domain Admins,CN=Users,DC=example,DC=com
+    const cnMatch = groupDN.match(/^cn=([^,\/]+)/i) || groupDN.match(/cn=([^,\/]+)/i);
+    if (cnMatch) {
+      return cnMatch[1].trim();
+    }
+    
+    // If no CN=, return the whole string (might be just a group name)
+    return groupDN.trim();
+  }
+
+  /**
    * Check if user is a member of a specific group
+   * Supports multiple LDAP formats:
+   * - HCL Domino: CN=LocalDomainAdmins (flat, no DC)
+   * - Active Directory: CN=Domain Admins,CN=Builtin,DC=example,DC=com
+   * - OpenLDAP: cn=admins,ou=groups,dc=example,dc=com
    */
   async isUserInGroup(username, groupName) {
-    ldapDebug('Checking group membership', { username, groupName });
+    ldapDebug('Checking group membership', { username, groupName, serverType: this.config.serverType });
     try {
       const user = await this.getUserFromLDAP(username);
       if (!user) {
@@ -1019,66 +1042,84 @@ class LDAPService {
       }
       
       const groups = user.groups || [];
-      ldapDebug('User groups from LDAP', { username, groupCount: groups.length, groups });
+      ldapDebug('User groups from LDAP', { 
+        username, 
+        groupCount: groups.length, 
+        groups,
+        serverType: this.config.serverType 
+      });
 
       if (groups.length === 0) {
         ldapDebug('No groups found for user', { username });
         return false;
       }
 
-      // Normalize group name for comparison
-      const normalizedGroupName = groupName.toLowerCase();
+      // Normalize the target group name - extract just the name part
+      const targetName = this._extractGroupName(groupName).toLowerCase();
+      ldapDebug('Target group name extracted', { original: groupName, extracted: targetName });
       
-      // Check various group formats
+      // Check each user group
       const isMember = groups.some(group => {
         if (!group) return false;
+        
+        // Extract the simple name from this group
+        const groupSimpleName = this._extractGroupName(group).toLowerCase();
         const groupLower = group.toLowerCase();
         
-        // Direct match
-        if (groupLower === normalizedGroupName) {
-          ldapDebug('Direct match found', { group, pattern: normalizedGroupName });
+        ldapDebug('Comparing group', { 
+          userGroup: group, 
+          simpleName: groupSimpleName, 
+          targetName 
+        });
+        
+        // 1. Direct simple name match (most reliable)
+        if (groupSimpleName === targetName) {
+          ldapDebug('Simple name match found', { group, targetName });
           return true;
         }
         
-        // CN match (e.g., "CN=LocalDomainAdmins,O=Org")
-        if (groupLower.includes(`cn=${normalizedGroupName}`)) {
-          ldapDebug('CN match found', { group, pattern: `cn=${normalizedGroupName}` });
+        // 2. Full DN contains the target (handles partial matches)
+        if (groupLower.includes(targetName)) {
+          ldapDebug('Partial match found', { group, targetName });
           return true;
         }
         
-        // Partial match - group contains the name anywhere
-        if (groupLower.includes(normalizedGroupName)) {
-          ldapDebug('Partial match found', { group, pattern: normalizedGroupName });
-          return true;
-        }
-        
-        // Extract CN value and compare
-        const cnMatch = group.match(/cn=([^,\/]+)/i);
-        if (cnMatch && cnMatch[1].toLowerCase() === normalizedGroupName) {
-          ldapDebug('CN extraction match found', { group, cn: cnMatch[1] });
-          return true;
-        }
-        
-        // Common admin group patterns
-        const adminPatterns = ['localdomainadmins', 'domain admins', 'administrators', 'admins'];
-        if (adminPatterns.includes(normalizedGroupName)) {
-          for (const pattern of adminPatterns) {
-            if (groupLower.includes(pattern)) {
-              ldapDebug('Admin pattern match found', { group, pattern });
-              return true;
-            }
+        // 3. For Domino - check if group is just "CN=GroupName" format
+        if (this.config.serverType === 'domino') {
+          // Domino groups are often flat: CN=LocalDomainAdmins or just LocalDomainAdmins
+          const dominoMatch = groupLower === targetName || 
+                             groupLower === `cn=${targetName}` ||
+                             groupLower.startsWith(`cn=${targetName},`) ||
+                             groupLower.startsWith(`cn=${targetName}/`);
+          if (dominoMatch) {
+            ldapDebug('Domino format match found', { group, targetName });
+            return true;
           }
         }
         
         return false;
       });
 
-      ldapDebug('Group membership result', { username, groupName, isMember });
+      ldapDebug('Group membership result', { username, groupName, targetName, isMember });
       return isMember;
     } catch (error) {
       logger.error('LDAP group check error', { error: error.message, username, groupName });
       return false;
     }
+  }
+
+  /**
+   * Check if user is a member of any of the specified groups
+   */
+  async isUserInAnyGroup(username, groupNames) {
+    if (!groupNames || groupNames.length === 0) return false;
+    
+    for (const groupName of groupNames) {
+      if (await this.isUserInGroup(username, groupName.trim())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

@@ -8,31 +8,79 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// System admin group name (configurable via env)
+// System admin group configuration (from env)
 const SYSTEM_ADMIN_GROUP = process.env.SYSTEM_ADMIN_GROUP || 'LocalDomainAdmins';
+const SYSTEM_ADMIN_GROUPS_EXTRA = process.env.SYSTEM_ADMIN_GROUPS_EXTRA || '';
+
+// Build list of all admin group patterns
+function getAdminGroupPatterns() {
+  const patterns = new Set();
+  
+  // Add primary group
+  patterns.add(SYSTEM_ADMIN_GROUP.toLowerCase());
+  
+  // Add extra groups from env (comma-separated)
+  if (SYSTEM_ADMIN_GROUPS_EXTRA) {
+    SYSTEM_ADMIN_GROUPS_EXTRA.split(',').forEach(g => {
+      const trimmed = g.trim().toLowerCase();
+      if (trimmed) patterns.add(trimmed);
+    });
+  }
+  
+  // Add common admin group names as fallback
+  ['localdomainadmins', 'domain admins', 'administrators'].forEach(p => patterns.add(p));
+  
+  return Array.from(patterns);
+}
+
+const ADMIN_GROUP_PATTERNS = getAdminGroupPatterns();
+logger.info('System admin group patterns configured', { patterns: ADMIN_GROUP_PATTERNS });
 
 /**
- * Check if a group name matches admin patterns
+ * Extract simple group name from LDAP DN format
+ * Handles: "CN=LocalDomainAdmins", "CN=LocalDomainAdmins,O=Org", "LocalDomainAdmins"
+ */
+function extractGroupName(groupDN) {
+  if (!groupDN) return '';
+  
+  // Try to extract CN value (works for AD, Domino, OpenLDAP)
+  const cnMatch = groupDN.match(/^cn=([^,\/]+)/i) || groupDN.match(/cn=([^,\/]+)/i);
+  if (cnMatch) {
+    return cnMatch[1].trim().toLowerCase();
+  }
+  
+  return groupDN.trim().toLowerCase();
+}
+
+/**
+ * Check if a group name matches any admin patterns
+ * Supports:
+ * - HCL Domino flat format: CN=LocalDomainAdmins (no DC)
+ * - Active Directory: CN=Domain Admins,CN=Builtin,DC=example,DC=com
+ * - OpenLDAP: cn=admins,ou=groups,dc=example,dc=com
  */
 function isAdminGroup(groupName) {
   if (!groupName) return false;
-  const groupLower = groupName.toLowerCase();
-  const patterns = [
-    'localdomainadmins',
-    'local domain admins',
-    'domain admins',
-    'domainadmins',
-    'administrators',
-    'admins',
-    SYSTEM_ADMIN_GROUP.toLowerCase()
-  ];
   
-  // Check if group contains any of the patterns
-  return patterns.some(pattern => {
-    // Direct inclusion
+  // Extract the simple name from the group DN
+  const simpleName = extractGroupName(groupName);
+  const groupLower = groupName.toLowerCase();
+  
+  // Check against all configured patterns
+  return ADMIN_GROUP_PATTERNS.some(pattern => {
+    // Direct simple name match
+    if (simpleName === pattern) return true;
+    
+    // Full DN contains the pattern
     if (groupLower.includes(pattern)) return true;
-    // CN format: cn=LocalDomainAdmins
+    
+    // CN format match (for Domino/AD)
     if (groupLower.includes(`cn=${pattern}`)) return true;
+    
+    // Check if pattern's simple name matches
+    const patternSimple = extractGroupName(pattern);
+    if (simpleName === patternSimple) return true;
+    
     return false;
   });
 }
@@ -211,7 +259,9 @@ router.get('/access-check', async (req, res) => {
       role: req.user.role,
       authSource: req.user.auth_source,
       requiredGroup: SYSTEM_ADMIN_GROUP,
-      userGroups: userGroups.slice(0, 10) // Return first 10 groups for debugging
+      configuredPatterns: ADMIN_GROUP_PATTERNS,
+      userGroups: userGroups.slice(0, 20), // Return first 20 groups for debugging
+      userGroupsSimple: userGroups.slice(0, 20).map(g => extractGroupName(g)) // Extracted names
     });
   } catch (error) {
     logger.error('Access check error', { error: error.message, stack: error.stack });

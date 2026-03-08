@@ -615,22 +615,41 @@ export default function SystemAdmin() {
           {accessInfo && (
             <div className="mt-4 p-4 bg-gray-50 rounded-lg text-left text-sm">
               <h4 className="font-medium text-gray-900 mb-2">Debug Information:</h4>
-              <div className="space-y-1 text-gray-600">
+              <div className="space-y-2 text-gray-600">
                 <p><strong>User:</strong> {accessInfo.user || 'Unknown'}</p>
                 <p><strong>Role:</strong> {accessInfo.role || 'Unknown'}</p>
                 <p><strong>Auth Source:</strong> {accessInfo.authSource || 'Unknown'}</p>
-                <p><strong>Required Group:</strong> {accessInfo.requiredGroup || 'LocalDomainAdmins'}</p>
+                
+                {accessInfo.configuredPatterns && (
+                  <div>
+                    <strong>Configured Admin Patterns:</strong>
+                    <div className="ml-4 mt-1 text-xs text-blue-600">
+                      {accessInfo.configuredPatterns.join(', ')}
+                    </div>
+                  </div>
+                )}
+                
                 {accessInfo.userGroups && accessInfo.userGroups.length > 0 && (
                   <div>
-                    <strong>Your Groups:</strong>
+                    <strong>Your Groups (raw):</strong>
                     <ul className="ml-4 mt-1 list-disc">
                       {accessInfo.userGroups.map((g, i) => (
-                        <li key={i} className="text-xs">{g}</li>
+                        <li key={i} className="text-xs font-mono">{g}</li>
                       ))}
                     </ul>
                   </div>
                 )}
-                {accessInfo.userGroups && accessInfo.userGroups.length === 0 && (
+                
+                {accessInfo.userGroupsSimple && accessInfo.userGroupsSimple.length > 0 && (
+                  <div>
+                    <strong>Your Groups (extracted names):</strong>
+                    <div className="ml-4 mt-1 text-xs text-green-600">
+                      {accessInfo.userGroupsSimple.filter(g => g).join(', ')}
+                    </div>
+                  </div>
+                )}
+                
+                {(!accessInfo.userGroups || accessInfo.userGroups.length === 0) && (
                   <p className="text-yellow-600">No groups found for your account</p>
                 )}
               </div>
