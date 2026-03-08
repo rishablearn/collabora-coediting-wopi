@@ -12,6 +12,32 @@ const router = express.Router();
 const SYSTEM_ADMIN_GROUP = process.env.SYSTEM_ADMIN_GROUP || 'LocalDomainAdmins';
 
 /**
+ * Check if a group name matches admin patterns
+ */
+function isAdminGroup(groupName) {
+  if (!groupName) return false;
+  const groupLower = groupName.toLowerCase();
+  const patterns = [
+    'localdomainadmins',
+    'local domain admins',
+    'domain admins',
+    'domainadmins',
+    'administrators',
+    'admins',
+    SYSTEM_ADMIN_GROUP.toLowerCase()
+  ];
+  
+  // Check if group contains any of the patterns
+  return patterns.some(pattern => {
+    // Direct inclusion
+    if (groupLower.includes(pattern)) return true;
+    // CN format: cn=LocalDomainAdmins
+    if (groupLower.includes(`cn=${pattern}`)) return true;
+    return false;
+  });
+}
+
+/**
  * Middleware to check if user is a system administrator (LocalDomainAdmins)
  */
 async function requireSystemAdmin(req, res, next) {
@@ -20,25 +46,32 @@ async function requireSystemAdmin(req, res, next) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    // Check if user is local admin
+    logger.info('Checking system admin access', { 
+      userId: req.user.id, 
+      username: req.user.username,
+      role: req.user.role,
+      authSource: req.user.auth_source
+    });
+
+    // Check if user is local admin with role
     if (req.user.role === 'admin') {
-      // For local admins, check if they have system_admin flag
-      const userResult = await pool.query(
-        'SELECT system_admin FROM users WHERE id = $1',
-        [req.user.id]
-      );
-      if (userResult.rows[0]?.system_admin) {
-        req.isSystemAdmin = true;
-        return next();
-      }
+      req.isSystemAdmin = true;
+      logger.info('System admin access granted via admin role', { username: req.user.username });
+      return next();
     }
 
-    // For LDAP/Domino users, check group membership
-    if (req.user.auth_source === 'ldap' || req.user.auth_source === 'ldap_ltpa' || req.user.auth_source === 'domino') {
-      const isInAdminGroup = await ldapService.isUserInGroup(req.user.username, SYSTEM_ADMIN_GROUP);
-      if (isInAdminGroup) {
-        req.isSystemAdmin = true;
-        return next();
+    // For any LDAP-based auth, check group membership directly
+    const authSource = req.user.auth_source || '';
+    if (authSource.includes('ldap') || authSource.includes('ltpa') || authSource === 'domino' || authSource === 'EXTERNAL_AUTH') {
+      try {
+        const isInAdminGroup = await ldapService.isUserInGroup(req.user.username, SYSTEM_ADMIN_GROUP);
+        if (isInAdminGroup) {
+          req.isSystemAdmin = true;
+          logger.info('System admin access granted via LDAP group', { username: req.user.username });
+          return next();
+        }
+      } catch (ldapErr) {
+        logger.warn('LDAP group check failed, trying cached groups', { error: ldapErr.message });
       }
     }
 
@@ -48,28 +81,45 @@ async function requireSystemAdmin(req, res, next) {
       [req.user.id]
     );
     
-    if (groupResult.rows[0]?.ldap_groups) {
-      const groups = groupResult.rows[0].ldap_groups;
-      const adminGroupPatterns = [
-        SYSTEM_ADMIN_GROUP.toLowerCase(),
-        'localdomainadmins',
-        'domain admins',
-        'administrators'
-      ];
-      
-      const hasAdminGroup = groups.some(g => 
-        adminGroupPatterns.some(pattern => g.toLowerCase().includes(pattern))
-      );
-      
+    const cachedGroups = groupResult.rows[0]?.ldap_groups || [];
+    logger.info('Checking cached groups', { username: req.user.username, cachedGroups });
+    
+    if (cachedGroups.length > 0) {
+      const hasAdminGroup = cachedGroups.some(g => isAdminGroup(g));
       if (hasAdminGroup) {
         req.isSystemAdmin = true;
+        logger.info('System admin access granted via cached groups', { username: req.user.username });
         return next();
       }
+    }
+
+    // Try getting fresh groups from LDAP and check
+    try {
+      const userGroups = await ldapService.getUserGroups(req.user.username);
+      logger.info('Fresh LDAP groups retrieved', { username: req.user.username, groups: userGroups });
+      
+      if (userGroups && userGroups.length > 0) {
+        // Cache the groups for future use
+        await pool.query(
+          'UPDATE users SET ldap_groups = $1 WHERE id = $2',
+          [userGroups, req.user.id]
+        );
+        
+        const hasAdminGroup = userGroups.some(g => isAdminGroup(g));
+        if (hasAdminGroup) {
+          req.isSystemAdmin = true;
+          logger.info('System admin access granted via fresh LDAP groups', { username: req.user.username });
+          return next();
+        }
+      }
+    } catch (groupErr) {
+      logger.warn('Failed to get fresh LDAP groups', { error: groupErr.message });
     }
 
     logger.warn('System admin access denied', { 
       userId: req.user.id, 
       username: req.user.username,
+      authSource: req.user.auth_source,
       requiredGroup: SYSTEM_ADMIN_GROUP 
     });
     
@@ -78,7 +128,7 @@ async function requireSystemAdmin(req, res, next) {
       message: `You must be a member of the ${SYSTEM_ADMIN_GROUP} group to access this feature.`
     });
   } catch (error) {
-    logger.error('Error checking system admin status', { error: error.message });
+    logger.error('Error checking system admin status', { error: error.message, stack: error.stack });
     return res.status(500).json({ error: 'Failed to verify administrator status' });
   }
 }
@@ -94,37 +144,59 @@ router.get('/access-check', async (req, res) => {
   try {
     let hasAccess = false;
     let reason = '';
+    let userGroups = [];
 
-    // Check local admin with system_admin flag
+    logger.info('Access check for user', { 
+      username: req.user.username, 
+      role: req.user.role,
+      authSource: req.user.auth_source 
+    });
+
+    // Check if user has admin role - automatically grant access
     if (req.user.role === 'admin') {
-      const userResult = await pool.query(
-        'SELECT system_admin FROM users WHERE id = $1',
-        [req.user.id]
-      );
-      if (userResult.rows[0]?.system_admin) {
-        hasAccess = true;
-        reason = 'Local system administrator';
-      }
+      hasAccess = true;
+      reason = 'Administrator role';
     }
 
-    // Check LDAP group membership
-    if (!hasAccess && (req.user.auth_source === 'ldap' || req.user.auth_source === 'ldap_ltpa')) {
+    // For any user, try to get LDAP groups
+    if (!hasAccess) {
+      const authSource = req.user.auth_source || '';
+      
+      // Try live LDAP lookup
       try {
         const isInAdminGroup = await ldapService.isUserInGroup(req.user.username, SYSTEM_ADMIN_GROUP);
+        userGroups = await ldapService.getUserGroups(req.user.username);
+        
         if (isInAdminGroup) {
           hasAccess = true;
           reason = `Member of ${SYSTEM_ADMIN_GROUP}`;
+        } else if (userGroups.some(g => isAdminGroup(g))) {
+          hasAccess = true;
+          reason = 'Member of admin group';
+        }
+        
+        // Cache groups if we got them
+        if (userGroups.length > 0) {
+          await pool.query(
+            'UPDATE users SET ldap_groups = $1 WHERE id = $2',
+            [userGroups, req.user.id]
+          ).catch(() => {});
         }
       } catch (ldapErr) {
-        // Check cached groups
+        logger.warn('LDAP lookup failed, checking cached', { error: ldapErr.message });
+      }
+      
+      // Check cached groups if LDAP failed
+      if (!hasAccess) {
         const groupResult = await pool.query(
           'SELECT ldap_groups FROM users WHERE id = $1',
           [req.user.id]
         );
         
-        if (groupResult.rows[0]?.ldap_groups) {
-          const groups = groupResult.rows[0].ldap_groups;
-          if (groups.some(g => g.toLowerCase().includes('localdomainadmins') || g.toLowerCase().includes('domain admins'))) {
+        const cachedGroups = groupResult.rows[0]?.ldap_groups || [];
+        if (cachedGroups.length > 0) {
+          userGroups = cachedGroups;
+          if (cachedGroups.some(g => isAdminGroup(g))) {
             hasAccess = true;
             reason = 'Cached group membership';
           }
@@ -136,11 +208,13 @@ router.get('/access-check', async (req, res) => {
       hasAccess,
       reason,
       user: req.user.username,
+      role: req.user.role,
       authSource: req.user.auth_source,
-      requiredGroup: SYSTEM_ADMIN_GROUP
+      requiredGroup: SYSTEM_ADMIN_GROUP,
+      userGroups: userGroups.slice(0, 10) // Return first 10 groups for debugging
     });
   } catch (error) {
-    logger.error('Access check error', { error: error.message });
+    logger.error('Access check error', { error: error.message, stack: error.stack });
     res.status(500).json({ error: 'Failed to check access' });
   }
 });

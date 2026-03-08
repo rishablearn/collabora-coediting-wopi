@@ -1013,7 +1013,16 @@ class LDAPService {
     ldapDebug('Checking group membership', { username, groupName });
     try {
       const user = await this.getUserFromLDAP(username);
-      if (!user || !user.groups) {
+      if (!user) {
+        ldapDebug('User not found in LDAP', { username });
+        return false;
+      }
+      
+      const groups = user.groups || [];
+      ldapDebug('User groups from LDAP', { username, groupCount: groups.length, groups });
+
+      if (groups.length === 0) {
+        ldapDebug('No groups found for user', { username });
         return false;
       }
 
@@ -1021,21 +1030,50 @@ class LDAPService {
       const normalizedGroupName = groupName.toLowerCase();
       
       // Check various group formats
-      const isMember = user.groups.some(group => {
+      const isMember = groups.some(group => {
+        if (!group) return false;
         const groupLower = group.toLowerCase();
+        
         // Direct match
-        if (groupLower === normalizedGroupName) return true;
-        // CN match (e.g., "cn=LocalDomainAdmins,ou=groups,dc=example,dc=com")
-        if (groupLower.includes(`cn=${normalizedGroupName}`)) return true;
-        // Partial match for common admin groups
-        if (normalizedGroupName === 'localdomainadmins' && 
-            (groupLower.includes('localdomainadmins') || 
-             groupLower.includes('domain admins') ||
-             groupLower.includes('administrators'))) return true;
+        if (groupLower === normalizedGroupName) {
+          ldapDebug('Direct match found', { group, pattern: normalizedGroupName });
+          return true;
+        }
+        
+        // CN match (e.g., "CN=LocalDomainAdmins,O=Org")
+        if (groupLower.includes(`cn=${normalizedGroupName}`)) {
+          ldapDebug('CN match found', { group, pattern: `cn=${normalizedGroupName}` });
+          return true;
+        }
+        
+        // Partial match - group contains the name anywhere
+        if (groupLower.includes(normalizedGroupName)) {
+          ldapDebug('Partial match found', { group, pattern: normalizedGroupName });
+          return true;
+        }
+        
+        // Extract CN value and compare
+        const cnMatch = group.match(/cn=([^,\/]+)/i);
+        if (cnMatch && cnMatch[1].toLowerCase() === normalizedGroupName) {
+          ldapDebug('CN extraction match found', { group, cn: cnMatch[1] });
+          return true;
+        }
+        
+        // Common admin group patterns
+        const adminPatterns = ['localdomainadmins', 'domain admins', 'administrators', 'admins'];
+        if (adminPatterns.includes(normalizedGroupName)) {
+          for (const pattern of adminPatterns) {
+            if (groupLower.includes(pattern)) {
+              ldapDebug('Admin pattern match found', { group, pattern });
+              return true;
+            }
+          }
+        }
+        
         return false;
       });
 
-      ldapDebug('Group membership result', { username, groupName, isMember, userGroups: user.groups });
+      ldapDebug('Group membership result', { username, groupName, isMember });
       return isMember;
     } catch (error) {
       logger.error('LDAP group check error', { error: error.message, username, groupName });

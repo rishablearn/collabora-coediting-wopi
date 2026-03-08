@@ -516,6 +516,7 @@ export default function SystemAdmin() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('health');
   const [hasAccess, setHasAccess] = useState(null);
+  const [accessInfo, setAccessInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [health, setHealth] = useState(null);
   const [versions, setVersions] = useState(null);
@@ -532,6 +533,7 @@ export default function SystemAdmin() {
   const checkAccess = async () => {
     try {
       const response = await api.get('/system/access-check');
+      setAccessInfo(response.data);
       setHasAccess(response.data.hasAccess);
       if (response.data.hasAccess) {
         loadAllData();
@@ -541,6 +543,7 @@ export default function SystemAdmin() {
         navigate('/login');
       } else {
         setHasAccess(false);
+        setAccessInfo(error.response?.data || { error: error.message });
       }
     } finally {
       setLoading(false);
@@ -600,16 +603,43 @@ export default function SystemAdmin() {
   // Access denied screen
   if (hasAccess === false) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="bg-white rounded-xl shadow-lg p-8 max-w-md text-center">
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-lg p-8 max-w-lg text-center">
           <Shield className="h-16 w-16 text-red-500 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
-          <p className="text-gray-600 mb-6">
+          <p className="text-gray-600 mb-4">
             You must be a member of the <strong>LocalDomainAdmins</strong> group to access System Administration.
           </p>
+          
+          {/* Debug info */}
+          {accessInfo && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg text-left text-sm">
+              <h4 className="font-medium text-gray-900 mb-2">Debug Information:</h4>
+              <div className="space-y-1 text-gray-600">
+                <p><strong>User:</strong> {accessInfo.user || 'Unknown'}</p>
+                <p><strong>Role:</strong> {accessInfo.role || 'Unknown'}</p>
+                <p><strong>Auth Source:</strong> {accessInfo.authSource || 'Unknown'}</p>
+                <p><strong>Required Group:</strong> {accessInfo.requiredGroup || 'LocalDomainAdmins'}</p>
+                {accessInfo.userGroups && accessInfo.userGroups.length > 0 && (
+                  <div>
+                    <strong>Your Groups:</strong>
+                    <ul className="ml-4 mt-1 list-disc">
+                      {accessInfo.userGroups.map((g, i) => (
+                        <li key={i} className="text-xs">{g}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {accessInfo.userGroups && accessInfo.userGroups.length === 0 && (
+                  <p className="text-yellow-600">No groups found for your account</p>
+                )}
+              </div>
+            </div>
+          )}
+          
           <button
             onClick={() => navigate('/')}
-            className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+            className="mt-6 px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
           >
             Return to Dashboard
           </button>
