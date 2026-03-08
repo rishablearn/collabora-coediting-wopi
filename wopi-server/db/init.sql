@@ -176,3 +176,23 @@ EXCEPTION
     WHEN duplicate_table THEN NULL;
     WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Migration: Add system_admin and ldap_groups columns to users table
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'system_admin'
+    ) THEN
+        ALTER TABLE users ADD COLUMN system_admin BOOLEAN DEFAULT false;
+    END IF;
+    
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'users' AND column_name = 'ldap_groups'
+    ) THEN
+        ALTER TABLE users ADD COLUMN ldap_groups TEXT[] DEFAULT '{}';
+    END IF;
+EXCEPTION
+    WHEN duplicate_column THEN NULL;
+END $$;

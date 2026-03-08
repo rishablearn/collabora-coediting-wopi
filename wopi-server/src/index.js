@@ -22,6 +22,7 @@ const usersRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
 const configRoutes = require('./routes/config');
 const sharedRoutes = require('./routes/shared');
+const systemRoutes = require('./routes/system');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -137,6 +138,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/shared', sharedRoutes);
+app.use('/api/system', systemRoutes);
 
 // WOPI Routes (must not have /api prefix for Collabora compatibility)
 app.use('/wopi', wopiRoutes);

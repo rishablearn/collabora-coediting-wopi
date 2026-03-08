@@ -1007,6 +1007,43 @@ class LDAPService {
   }
 
   /**
+   * Check if user is a member of a specific group
+   */
+  async isUserInGroup(username, groupName) {
+    ldapDebug('Checking group membership', { username, groupName });
+    try {
+      const user = await this.getUserFromLDAP(username);
+      if (!user || !user.groups) {
+        return false;
+      }
+
+      // Normalize group name for comparison
+      const normalizedGroupName = groupName.toLowerCase();
+      
+      // Check various group formats
+      const isMember = user.groups.some(group => {
+        const groupLower = group.toLowerCase();
+        // Direct match
+        if (groupLower === normalizedGroupName) return true;
+        // CN match (e.g., "cn=LocalDomainAdmins,ou=groups,dc=example,dc=com")
+        if (groupLower.includes(`cn=${normalizedGroupName}`)) return true;
+        // Partial match for common admin groups
+        if (normalizedGroupName === 'localdomainadmins' && 
+            (groupLower.includes('localdomainadmins') || 
+             groupLower.includes('domain admins') ||
+             groupLower.includes('administrators'))) return true;
+        return false;
+      });
+
+      ldapDebug('Group membership result', { username, groupName, isMember, userGroups: user.groups });
+      return isMember;
+    } catch (error) {
+      logger.error('LDAP group check error', { error: error.message, username, groupName });
+      return false;
+    }
+  }
+
+  /**
    * Test LDAP connection and optionally search for a test user
    */
   async testConnection(testUsername = null) {

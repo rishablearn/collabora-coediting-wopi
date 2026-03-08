@@ -9,7 +9,8 @@ import {
   Menu,
   X,
   FileText,
-  ChevronDown
+  ChevronDown,
+  Shield
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 
@@ -112,6 +113,14 @@ export default function Layout() {
                       <Settings className="h-4 w-4 text-gray-400" />
                       {text.settingsLabel || 'Settings'}
                     </Link>
+                    <Link
+                      to="/system"
+                      onClick={() => setUserMenuOpen(false)}
+                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      <Shield className="h-4 w-4 text-gray-400" />
+                      System Admin
+                    </Link>
                     <button
                       onClick={handleLogout}
                       className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
@@ -166,6 +175,19 @@ export default function Layout() {
                   {label}
                 </Link>
               ))}
+              
+              <Link
+                to="/system"
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium transition-all ${
+                  isActive('/system')
+                    ? 'bg-primary-50 text-primary-700'
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <Shield className="h-5 w-5" />
+                System Admin
+              </Link>
               
               <hr className="my-2 border-gray-200" />
               
