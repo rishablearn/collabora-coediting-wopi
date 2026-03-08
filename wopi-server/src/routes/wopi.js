@@ -74,11 +74,30 @@ router.get('/files/:fileId', async (req, res) => {
     const file = result.rows[0];
 
     // Check permissions using sharing service
-    const accessInfo = await sharingService.checkFileAccess(fileId, tokenData.userId);
+    // Pass shareToken if this is a share-based access
+    const shareToken = tokenData.shareToken || null;
+    const accessInfo = await sharingService.checkFileAccess(fileId, tokenData.userId, shareToken);
     
     // Determine edit capability
-    const canEdit = (tokenData.permissions === 'edit' || tokenData.permissions === 'admin') && accessInfo.canWrite;
+    // For share-based access, use token permissions directly
+    // For authenticated access, also check accessInfo.canWrite
+    const isShareAccess = tokenData.authSource === 'authenticated_share' || tokenData.authSource === 'anonymous_share' || tokenData.authSource === 'share';
+    const tokenHasEdit = tokenData.permissions === 'edit' || tokenData.permissions === 'admin';
+    
+    // If accessing via share link with edit permission, allow editing
+    // Otherwise, require both token permission AND accessInfo.canWrite
+    const canEdit = isShareAccess ? tokenHasEdit : (tokenHasEdit && accessInfo.canWrite);
     const isOwner = tokenData.userId === file.owner_id;
+    
+    logger.info('WOPI CheckFileInfo permissions', {
+      fileId,
+      userId: tokenData.userId,
+      isShareAccess,
+      tokenPermissions: tokenData.permissions,
+      accessInfoCanWrite: accessInfo.canWrite,
+      canEdit,
+      authSource: tokenData.authSource
+    });
 
     // Get file stats
     const filePath = path.join(STORAGE_PATH, file.storage_path);

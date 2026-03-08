@@ -203,6 +203,9 @@ class SharingService {
    */
   async recordSession(userId, fileId, sessionToken, ipAddress, userAgent) {
     try {
+      // First, try to ensure the unique constraint exists (migration)
+      await this._ensureSessionTokenConstraint();
+      
       await pool.query(
         `INSERT INTO active_sessions (user_id, file_id, session_token, ip_address, user_agent, last_activity)
          VALUES ($1, $2, $3, $4, $5, NOW())
@@ -214,6 +217,21 @@ class SharingService {
         [userId, fileId, sessionToken, ipAddress, userAgent]
       );
     } catch (error) {
+      // If ON CONFLICT fails, try simple insert/update approach
+      if (error.code === '42P10') {
+        try {
+          // Delete old session and insert new one
+          await pool.query('DELETE FROM active_sessions WHERE session_token = $1', [sessionToken]);
+          await pool.query(
+            `INSERT INTO active_sessions (user_id, file_id, session_token, ip_address, user_agent, last_activity)
+             VALUES ($1, $2, $3, $4, $5, NOW())`,
+            [userId, fileId, sessionToken, ipAddress, userAgent]
+          );
+          return;
+        } catch (fallbackErr) {
+          logger.warn('Fallback session insert also failed', { error: fallbackErr.message });
+        }
+      }
       // Log but don't throw - session tracking is non-critical
       logger.warn('Failed to record session', { 
         userId, 
@@ -221,6 +239,35 @@ class SharingService {
         error: error.message,
         code: error.code 
       });
+    }
+  }
+
+  /**
+   * Ensure session_token unique constraint exists (run migration if needed)
+   */
+  async _ensureSessionTokenConstraint() {
+    if (this._constraintChecked) return;
+    
+    try {
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint 
+            WHERE conname = 'active_sessions_session_token_key'
+          ) THEN
+            -- Add unique constraint if it doesn't exist
+            ALTER TABLE active_sessions ADD CONSTRAINT active_sessions_session_token_key UNIQUE (session_token);
+          END IF;
+        EXCEPTION
+          WHEN duplicate_object THEN NULL;
+          WHEN duplicate_table THEN NULL;
+        END $$;
+      `);
+      this._constraintChecked = true;
+    } catch (err) {
+      // Ignore errors - constraint might already exist or be named differently
+      this._constraintChecked = true;
     }
   }
 
