@@ -313,6 +313,189 @@ router.get('/access-check', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/system/audit-logs
+ * Get audit logs for co-editing and file operations
+ * Available to all authenticated users
+ */
+router.get('/audit-logs', async (req, res) => {
+  try {
+    const { 
+      action = 'all',
+      resourceType = 'all',
+      userId,
+      fileId,
+      limit = 50,
+      offset = 0,
+      startDate,
+      endDate 
+    } = req.query;
+
+    let query = `
+      SELECT 
+        a.id,
+        a.user_id,
+        a.action,
+        a.resource_type,
+        a.resource_id,
+        a.details,
+        a.ip_address,
+        a.created_at,
+        u.display_name as user_name,
+        u.email as user_email,
+        f.original_filename as file_name
+      FROM audit_log a
+      LEFT JOIN users u ON a.user_id = u.id
+      LEFT JOIN files f ON a.resource_id::uuid = f.id AND a.resource_type = 'file'
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramIndex = 1;
+
+    if (action !== 'all') {
+      query += ` AND a.action = $${paramIndex}`;
+      params.push(action);
+      paramIndex++;
+    }
+
+    if (resourceType !== 'all') {
+      query += ` AND a.resource_type = $${paramIndex}`;
+      params.push(resourceType);
+      paramIndex++;
+    }
+
+    if (userId) {
+      query += ` AND a.user_id = $${paramIndex}`;
+      params.push(userId);
+      paramIndex++;
+    }
+
+    if (fileId) {
+      query += ` AND a.resource_id = $${paramIndex}`;
+      params.push(fileId);
+      paramIndex++;
+    }
+
+    if (startDate) {
+      query += ` AND a.created_at >= $${paramIndex}`;
+      params.push(new Date(startDate));
+      paramIndex++;
+    }
+
+    if (endDate) {
+      query += ` AND a.created_at <= $${paramIndex}`;
+      params.push(new Date(endDate));
+      paramIndex++;
+    }
+
+    const countQuery = query.replace(/SELECT[\s\S]*?FROM/, 'SELECT COUNT(*) FROM');
+    const countResult = await pool.query(countQuery, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    query += ` ORDER BY a.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await pool.query(query, params);
+
+    const statsResult = await pool.query(`
+      SELECT action, COUNT(*) as count
+      FROM audit_log
+      WHERE created_at > NOW() - INTERVAL '24 hours'
+      GROUP BY action
+      ORDER BY count DESC
+    `);
+
+    res.json({
+      logs: result.rows.map(row => ({
+        id: row.id,
+        userId: row.user_id,
+        userName: row.user_name || 'Unknown',
+        userEmail: row.user_email,
+        action: row.action,
+        resourceType: row.resource_type,
+        resourceId: row.resource_id,
+        fileName: row.file_name,
+        details: row.details,
+        ipAddress: row.ip_address,
+        createdAt: row.created_at
+      })),
+      total,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      hasMore: parseInt(offset) + parseInt(limit) < total,
+      stats: statsResult.rows
+    });
+  } catch (error) {
+    logger.error('Error getting audit logs', { error: error.message });
+    res.status(500).json({ error: 'Failed to get audit logs' });
+  }
+});
+
+/**
+ * GET /api/system/active-sessions
+ * Get currently active editing sessions
+ * Available to all authenticated users
+ */
+router.get('/active-sessions', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        s.id,
+        s.user_id,
+        s.file_id,
+        s.session_token,
+        s.ip_address,
+        s.user_agent,
+        s.last_activity,
+        u.display_name as user_name,
+        u.email as user_email,
+        f.original_filename as file_name
+      FROM active_sessions s
+      LEFT JOIN users u ON s.user_id = u.id
+      LEFT JOIN files f ON s.file_id = f.id
+      WHERE s.last_activity > NOW() - INTERVAL '30 minutes'
+      ORDER BY s.last_activity DESC
+    `);
+
+    const sessionsByFile = {};
+    result.rows.forEach(row => {
+      if (!sessionsByFile[row.file_id]) {
+        sessionsByFile[row.file_id] = {
+          fileId: row.file_id,
+          fileName: row.file_name,
+          editors: []
+        };
+      }
+      sessionsByFile[row.file_id].editors.push({
+        userId: row.user_id,
+        userName: row.user_name || 'Unknown',
+        userEmail: row.user_email,
+        lastActivity: row.last_activity,
+        ipAddress: row.ip_address
+      });
+    });
+
+    res.json({
+      sessions: result.rows.map(row => ({
+        id: row.id,
+        userId: row.user_id,
+        userName: row.user_name || 'Unknown',
+        userEmail: row.user_email,
+        fileId: row.file_id,
+        fileName: row.file_name,
+        lastActivity: row.last_activity,
+        ipAddress: row.ip_address
+      })),
+      byFile: Object.values(sessionsByFile),
+      totalSessions: result.rows.length,
+      totalFiles: Object.keys(sessionsByFile).length
+    });
+  } catch (error) {
+    logger.error('Error getting active sessions', { error: error.message });
+    res.status(500).json({ error: 'Failed to get active sessions' });
+  }
+});
+
 // All routes below require system admin access
 router.use(requireSystemAdmin);
 
@@ -933,197 +1116,6 @@ router.get('/stats', async (req, res) => {
   } catch (error) {
     logger.error('Error getting stats', { error: error.message });
     res.status(500).json({ error: 'Failed to get statistics' });
-  }
-});
-
-// Helper function to format bytes
-/**
- * GET /api/system/audit-logs
- * Get audit logs for co-editing and file operations
- */
-router.get('/audit-logs', async (req, res) => {
-  try {
-    const { 
-      action = 'all',
-      resourceType = 'all',
-      userId,
-      fileId,
-      limit = 50,
-      offset = 0,
-      startDate,
-      endDate 
-    } = req.query;
-
-    let query = `
-      SELECT 
-        a.id,
-        a.user_id,
-        a.action,
-        a.resource_type,
-        a.resource_id,
-        a.details,
-        a.ip_address,
-        a.created_at,
-        u.display_name as user_name,
-        u.email as user_email,
-        f.original_filename as file_name
-      FROM audit_log a
-      LEFT JOIN users u ON a.user_id = u.id
-      LEFT JOIN files f ON a.resource_id::uuid = f.id AND a.resource_type = 'file'
-      WHERE 1=1
-    `;
-    const params = [];
-    let paramIndex = 1;
-
-    // Filter by action type
-    if (action !== 'all') {
-      query += ` AND a.action = $${paramIndex}`;
-      params.push(action);
-      paramIndex++;
-    }
-
-    // Filter by resource type
-    if (resourceType !== 'all') {
-      query += ` AND a.resource_type = $${paramIndex}`;
-      params.push(resourceType);
-      paramIndex++;
-    }
-
-    // Filter by user
-    if (userId) {
-      query += ` AND a.user_id = $${paramIndex}`;
-      params.push(userId);
-      paramIndex++;
-    }
-
-    // Filter by file
-    if (fileId) {
-      query += ` AND a.resource_id = $${paramIndex}`;
-      params.push(fileId);
-      paramIndex++;
-    }
-
-    // Date range
-    if (startDate) {
-      query += ` AND a.created_at >= $${paramIndex}`;
-      params.push(new Date(startDate));
-      paramIndex++;
-    }
-
-    if (endDate) {
-      query += ` AND a.created_at <= $${paramIndex}`;
-      params.push(new Date(endDate));
-      paramIndex++;
-    }
-
-    // Get total count
-    const countQuery = query.replace(/SELECT[\s\S]*?FROM/, 'SELECT COUNT(*) FROM');
-    const countResult = await pool.query(countQuery, params);
-    const total = parseInt(countResult.rows[0].count);
-
-    // Add ordering and pagination
-    query += ` ORDER BY a.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-    params.push(parseInt(limit), parseInt(offset));
-
-    const result = await pool.query(query, params);
-
-    // Get action statistics
-    const statsResult = await pool.query(`
-      SELECT action, COUNT(*) as count
-      FROM audit_log
-      WHERE created_at > NOW() - INTERVAL '24 hours'
-      GROUP BY action
-      ORDER BY count DESC
-    `);
-
-    res.json({
-      logs: result.rows.map(row => ({
-        id: row.id,
-        userId: row.user_id,
-        userName: row.user_name || 'Unknown',
-        userEmail: row.user_email,
-        action: row.action,
-        resourceType: row.resource_type,
-        resourceId: row.resource_id,
-        fileName: row.file_name,
-        details: row.details,
-        ipAddress: row.ip_address,
-        createdAt: row.created_at
-      })),
-      total,
-      limit: parseInt(limit),
-      offset: parseInt(offset),
-      hasMore: parseInt(offset) + parseInt(limit) < total,
-      stats: statsResult.rows
-    });
-  } catch (error) {
-    logger.error('Error getting audit logs', { error: error.message });
-    res.status(500).json({ error: 'Failed to get audit logs' });
-  }
-});
-
-/**
- * GET /api/system/active-sessions
- * Get currently active editing sessions
- */
-router.get('/active-sessions', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT 
-        s.id,
-        s.user_id,
-        s.file_id,
-        s.session_token,
-        s.ip_address,
-        s.user_agent,
-        s.last_activity,
-        u.display_name as user_name,
-        u.email as user_email,
-        f.original_filename as file_name
-      FROM active_sessions s
-      LEFT JOIN users u ON s.user_id = u.id
-      LEFT JOIN files f ON s.file_id = f.id
-      WHERE s.last_activity > NOW() - INTERVAL '30 minutes'
-      ORDER BY s.last_activity DESC
-    `);
-
-    // Group sessions by file for co-editing view
-    const sessionsByFile = {};
-    result.rows.forEach(row => {
-      if (!sessionsByFile[row.file_id]) {
-        sessionsByFile[row.file_id] = {
-          fileId: row.file_id,
-          fileName: row.file_name,
-          editors: []
-        };
-      }
-      sessionsByFile[row.file_id].editors.push({
-        userId: row.user_id,
-        userName: row.user_name || 'Unknown',
-        userEmail: row.user_email,
-        lastActivity: row.last_activity,
-        ipAddress: row.ip_address
-      });
-    });
-
-    res.json({
-      sessions: result.rows.map(row => ({
-        id: row.id,
-        userId: row.user_id,
-        userName: row.user_name || 'Unknown',
-        userEmail: row.user_email,
-        fileId: row.file_id,
-        fileName: row.file_name,
-        lastActivity: row.last_activity,
-        ipAddress: row.ip_address
-      })),
-      byFile: Object.values(sessionsByFile),
-      totalSessions: result.rows.length,
-      totalFiles: Object.keys(sessionsByFile).length
-    });
-  } catch (error) {
-    logger.error('Error getting active sessions', { error: error.message });
-    res.status(500).json({ error: 'Failed to get active sessions' });
   }
 });
 

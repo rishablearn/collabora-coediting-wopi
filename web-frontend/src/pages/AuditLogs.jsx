@@ -137,7 +137,7 @@ export default function AuditLogs() {
         resourceType: resourceFilter
       });
       
-      const response = await api.get(`/api/system/audit-logs?${params}`);
+      const response = await api.get(`/system/audit-logs?${params}`);
       setLogs(response.data.logs);
       setTotal(response.data.total);
       setStats(response.data.stats || []);
@@ -152,7 +152,7 @@ export default function AuditLogs() {
   const fetchActiveSessions = useCallback(async () => {
     try {
       setSessionsLoading(true);
-      const response = await api.get('/api/system/active-sessions');
+      const response = await api.get('/system/active-sessions');
       setActiveSessions(response.data);
     } catch (error) {
       console.error('Failed to fetch active sessions:', error);
@@ -197,8 +197,9 @@ export default function AuditLogs() {
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-4">
               <button
-                onClick={() => navigate('/dashboard')}
+                onClick={() => navigate('/')}
                 className="p-2 hover:bg-gray-100 rounded-lg"
+                title="Back to Dashboard"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
